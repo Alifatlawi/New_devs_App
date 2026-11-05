@@ -12,6 +12,7 @@
 import { supabase } from './supabase';
 import { sessionManager } from '../utils/sessionManager';
 import { withRetry, handleApiError, classifyError } from '../utils/apiErrorHandler';
+import type { DashboardProperty, RevenuePeriod, RevenueSummaryData } from '../types/dashboard';
 
 // Get backend URL with fallback for misconfigured production environments
 const getBackendUrl = () => {
@@ -1450,22 +1451,22 @@ export class SecureAPIClient {
 
   // ============= DASHBOARD API =============
   /**
-   * Get dashboard summary with optional simulation header
+   * Properties of the signed-in user's tenant (the tenant is resolved server-side from the token).
    */
-  async getDashboardSummary(propertyId: string, options?: { simulatedTenant?: string, timestamp?: number }) {
+  async getDashboardProperties(): Promise<DashboardProperty[]> {
+    return this.request<DashboardProperty[]>('/api/v1/dashboard/properties');
+  }
+
+  /**
+   * Revenue summary for one property: all time, or one calendar month in the property's time zone.
+   */
+  async getDashboardSummary(propertyId: string, period?: RevenuePeriod | null): Promise<RevenueSummaryData> {
     const queryParams = new URLSearchParams({ property_id: propertyId });
-    if (options?.timestamp) {
-      queryParams.append('_t', options.timestamp.toString());
+    if (period) {
+      queryParams.append('year', String(period.year));
+      queryParams.append('month', String(period.month));
     }
-
-    const requestOptions: RequestInit = {};
-    if (options?.simulatedTenant) {
-      requestOptions.headers = {
-        'X-Simulated-Tenant': options.simulatedTenant
-      };
-    }
-
-    return this.request<any>(`/api/v1/dashboard/summary?${queryParams}`, requestOptions);
+    return this.request<RevenueSummaryData>(`/api/v1/dashboard/summary?${queryParams}`);
   }
 
   async uploadCompanyLogo(logo_url: string) {

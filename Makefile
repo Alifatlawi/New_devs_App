@@ -10,3 +10,7 @@ pre-commit:
 
 uv-install:
 	cd backend && uv sync
+
+# Backend tests, run inside the running backend container (docker compose up first)
+test:
+	docker compose exec backend sh -c "pip install -q -r requirements-dev.txt && python -m pytest -q"

@@ -1,51 +1,68 @@
 import React, { useEffect, useState } from 'react';
 import { SecureAPI } from '../lib/secureApi';
-
-interface RevenueData {
-    property_id: string;
-    total_revenue: number;
-    currency: string;
-    reservations_count: number;
-}
+import type { RevenueSummaryData } from '../types/dashboard';
 
 interface RevenueSummaryProps {
-    propertyId?: string;
-    debugTenant?: string; 
-    showRaw?: boolean;
+    propertyId: string;
+    /** Set year and month together for a monthly total; omit both for all time. */
+    year?: number;
+    month?: number;
 }
 
-export const RevenueSummary: React.FC<RevenueSummaryProps> = ({ propertyId = 'prop-001', debugTenant, showRaw }) => {
-    const [data, setData] = useState<RevenueData | null>(null);
+const formatMoney = (amount: string, currency: string): string => {
+    // The API has already rounded to cents; Number() is used for display formatting only, no arithmetic.
+    try {
+        return new Intl.NumberFormat(undefined, {
+            style: 'currency',
+            currency,
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+        }).format(Number(amount));
+    } catch {
+        return `${currency} ${amount}`; // unknown currency code
+    }
+};
+
+const formatPeriod = (year?: number, month?: number): string =>
+    year !== undefined && month !== undefined
+        ? new Date(Date.UTC(year, month - 1, 1)).toLocaleString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' })
+        : 'All time';
+
+export const RevenueSummary: React.FC<RevenueSummaryProps> = ({ propertyId, year, month }) => {
+    const [data, setData] = useState<RevenueSummaryData | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
 
-    const activeTenant = debugTenant || 'candidate';
-
     useEffect(() => {
-        const fetchRevenue = async () => {
-            setLoading(true);
-            try {
-                // Use SecureAPI to handle authentication automatically
-                // We pass the simulatedTenant option which SecureAPI will attach as a header
-                const response = await SecureAPI.getDashboardSummary(propertyId, {
-                    simulatedTenant: activeTenant,
-                    timestamp: Date.now()
-                });
-                setData(response);
-            } catch (err) {
-                setError('Failed to load revenue data');
-                console.error(err);
-            } finally {
-                setLoading(false);
-            }
-        };
+        // Ignore a response that arrives after the user has switched property/period,
+        // otherwise a slow request can overwrite the current selection with stale numbers.
+        let cancelled = false;
+        setLoading(true);
+        setError('');
 
-        fetchRevenue();
-    }, [propertyId, activeTenant]);
+        const period = year !== undefined && month !== undefined ? { year, month } : null;
+        SecureAPI.getDashboardSummary(propertyId, period)
+            .then((response) => {
+                if (!cancelled) setData(response);
+            })
+            .catch((err: unknown) => {
+                if (cancelled) return;
+                console.error(err);
+                setData(null);
+                setError('Failed to load revenue data');
+            })
+            .finally(() => {
+                if (!cancelled) setLoading(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [propertyId, year, month]);
 
     if (loading) {
         return (
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200" aria-label="Loading revenue">
                 <div className="animate-pulse space-y-4">
                     <div className="h-4 bg-gray-100 rounded w-1/4"></div>
                     <div className="h-8 bg-gray-100 rounded w-1/2"></div>
@@ -58,37 +75,22 @@ export const RevenueSummary: React.FC<RevenueSummaryProps> = ({ propertyId = 'pr
         );
     }
 
-    if (error) return <div className="p-4 text-red-500 bg-red-50 rounded-lg">{error}</div>;
+    if (error) return <div className="p-4 text-red-600 bg-red-50 rounded-lg">{error}</div>;
     if (!data) return null;
 
-    const displayTotal = Math.round(data.total_revenue * 100) / 100;
-
     return (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hover:shadow-md transition-shadow duration-300">
-            {showRaw && (
-                <div className="p-3 bg-gray-50 text-xs font-mono border-b border-gray-100 overflow-auto max-h-32">
-                    <strong className="block mb-1 text-gray-500 uppercase tracking-wider text-[10px]">Raw API Response</strong>
-                    <pre className="text-gray-700">{JSON.stringify(data, null, 2)}</pre>
-                </div>
-            )}
-
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="p-6">
-                <div className="flex items-center justify-between mb-6">
-                    <div>
-                        <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide">Total Revenue</h2>
-                        <div className="flex items-baseline gap-2 mt-1">
-                            <span className="text-3xl font-bold text-gray-900 tracking-tight">
-                                {data.currency} {displayTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </span>
-                            {/* Fake trend indicator for premium feel */}
-                            <span className="inline-flex items-baseline px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 md:mt-2 lg:mt-0">
-                                <svg className="-ml-1 mr-0.5 h-3 w-3 flex-shrink-0 self-center text-green-500" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
-                                    <path fillRule="evenodd" d="M5.293 9.707a1 1 0 010-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 01-1.414 1.414L11 7.414V15a1 1 0 11-2 0V7.414L6.707 9.707a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                                </svg>
-                                12%
-                            </span>
-                        </div>
-                    </div>
+                <div className="mb-6">
+                    <h2 className="text-sm font-medium text-gray-500 uppercase tracking-wide">
+                        Total Revenue · {formatPeriod(year, month)}
+                    </h2>
+                    <p className="text-3xl font-bold text-gray-900 tracking-tight mt-1 break-words">
+                        {formatMoney(data.total_revenue, data.currency)}
+                    </p>
+                    {data.reservations_count === 0 && (
+                        <p className="text-sm text-gray-500 mt-2">No reservations in this period.</p>
+                    )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-100">
@@ -100,18 +102,6 @@ export const RevenueSummary: React.FC<RevenueSummaryProps> = ({ propertyId = 'pr
                         <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">Reservations</p>
                         <p className="text-sm font-semibold text-gray-700 mt-1">{data.reservations_count} <span className="font-normal text-gray-400">bookings</span></p>
                     </div>
-                </div>
-
-                {/* Precision Warning Area */}
-                <div className="mt-4 h-6">
-                    {Math.abs(data.total_revenue - displayTotal) > 0.000001 && showRaw && (
-                        <div className="flex items-center text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">
-                            <svg className="h-4 w-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-                            </svg>
-                            Precision Mismatch Detected
-                        </div>
-                    )}
                 </div>
             </div>
         </div>

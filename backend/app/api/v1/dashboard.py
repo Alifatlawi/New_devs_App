@@ -57,7 +57,7 @@ async def get_dashboard_summary(
     tenant_id: str = Depends(require_tenant),
 ) -> RevenueSummaryResponse:
     if (year is None) != (month is None):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Provide both year and month, or neither")
+        raise HTTPException(status_code=422, detail="Provide both year and month, or neither")
 
     try:
         revenue_data = await get_revenue_summary(property_id, tenant_id, year, month)
