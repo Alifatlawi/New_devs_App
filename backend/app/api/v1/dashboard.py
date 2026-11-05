@@ -8,7 +8,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.core.auth import authenticate_request as get_current_user
 from app.models.auth import AuthenticatedUser
 from app.services.cache import get_revenue_summary
-from app.services.reservations import MixedCurrencyError, PropertyNotFoundError, list_properties
+from app.services.reservations import (
+    InvalidTimezoneError,
+    MixedCurrencyError,
+    PropertyNotFoundError,
+    list_properties,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +36,7 @@ class PropertyResponse(BaseModel):
     id: str
     name: str
     timezone: str
+    latest_booking_year: Optional[int] = None  # lets the UI default the month picker to a year with data
 
 
 def require_tenant(current_user: AuthenticatedUser = Depends(get_current_user)) -> str:
@@ -68,6 +74,12 @@ async def get_dashboard_summary(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Reservations use more than one currency and cannot be summed into one total",
+        )
+    except InvalidTimezoneError:
+        logger.error("Property %s of tenant %s has an invalid time zone", property_id, tenant_id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="This property's time zone is misconfigured; monthly totals are unavailable",
         )
     except (SQLAlchemyError, OSError):
         logger.exception("Revenue query failed for tenant %s property %s", tenant_id, property_id)

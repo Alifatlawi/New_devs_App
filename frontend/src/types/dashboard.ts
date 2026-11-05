@@ -3,6 +3,8 @@ export interface DashboardProperty {
   name: string;
   /** IANA time zone, e.g. "Europe/Paris". Monthly totals use the property's local calendar. */
   timezone: string;
+  /** Year (property-local) of the most recent check-in, or null if the property has no bookings. */
+  latest_booking_year: number | null;
 }
 
 export interface RevenuePeriod {

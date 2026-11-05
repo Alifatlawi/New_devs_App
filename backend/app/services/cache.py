@@ -39,7 +39,7 @@ async def get_revenue_summary(
         cached = await redis_client.get(cache_key)
         if cached:
             return json.loads(cached)
-    except RedisError as exc:
+    except (RedisError, ValueError) as exc:  # ValueError: corrupt/non-JSON entry -> recompute
         logger.warning("Revenue cache read failed for %s: %s", cache_key, exc)
 
     result = await calculate_revenue(property_id, tenant_id, year, month)

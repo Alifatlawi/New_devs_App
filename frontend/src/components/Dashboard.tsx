@@ -10,6 +10,14 @@ const MONTHS = [
 const CURRENT_YEAR = new Date().getFullYear();
 const YEARS = Array.from({ length: 6 }, (_, i) => CURRENT_YEAR - i);
 
+// Default the year picker to the most recent year that has bookings, so picking a month
+// doesn't land on an empty year (e.g. data from 2024 viewed in 2026).
+const latestBookingYear = (properties: DashboardProperty[]): number =>
+  properties.reduce<number | null>(
+    (latest, p) => (p.latest_booking_year !== null && (latest === null || p.latest_booking_year > latest) ? p.latest_booking_year : latest),
+    null,
+  ) ?? CURRENT_YEAR;
+
 const selectClassName =
   "block w-full sm:w-auto px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-sm bg-white disabled:bg-gray-100 disabled:text-gray-400";
 
@@ -29,6 +37,7 @@ const Dashboard: React.FC = () => {
         if (cancelled) return;
         setProperties(list);
         setSelectedPropertyId((current) => current || list[0]?.id || '');
+        setYear(latestBookingYear(list));
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -116,7 +125,7 @@ const Dashboard: React.FC = () => {
                     disabled={!month}
                     className={selectClassName}
                   >
-                    {YEARS.map((y) => (
+                    {(YEARS.includes(year) ? YEARS : [year, ...YEARS]).map((y) => (
                       <option key={y} value={y}>
                         {y}
                       </option>
