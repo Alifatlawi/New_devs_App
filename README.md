@@ -175,11 +175,17 @@ curl -X POST localhost:8000/api/v1/auth/login -d '{"email":"candidate@propertyfl
 - Half-up rounding for reporting. Banker's rounding is a one-line change if finance prefers it.
 - The schema and seed data are unchanged. This was a debugging exercise, not a rebuild.
 
-## Known issue (pre-existing, out of scope)
-- **Refreshing the page can sign the user out.** The backend sees only successful requests (no 401s), so the cause is in the original frontend session layer, which I haven't changed.
-  - The recovery fallback in `frontend/src/utils/sessionRecovery.ts:113-114` calls `import.meta.env.VITE_SUPABASE_URL.split(...)`. That variable is undefined in this setup, so it throws `TypeError`.
-  - The fallback also looks under the Supabase storage key, while `localAuthClient.ts` stores the session as `base360-auth-token`, so it could never restore the session.
-  - Fix next: read the session from `localAuthClient`'s key, and stop treating a transient empty session as a logout.
+## Bonus fix: refreshing the page signed the user out
+- **Symptom:** after two or three refreshes, the user lands on the login page again. The backend only ever saw successful requests, so the cause was in the frontend.
+- **Root cause:** `frontend/src/utils/localStorageManager.ts` runs a storage-version check on page load.
+  - When it runs, it clears localStorage and keeps only keys containing `supabase` or `sb-`.
+  - This app's local auth stores the session under **`base360-auth-token`**, so the session was deleted, and the next refresh found no session.
+  - Reproduced deterministically: log in, remove `app_storage_version`, refresh, and the token is gone.
+- **Related:** the recovery fallback in `sessionRecovery.ts` called `import.meta.env.VITE_SUPABASE_URL.split(...)`, which threw `TypeError` because there's no Supabase URL here.
+- **Fix:**
+  - Both cleanup paths now keep the auth session key.
+  - The recovery code resolves the storage key without assuming a Supabase URL.
+  - Verified: the token survives the version cleanup, and repeated reloads stay on the dashboard for both clients.
 
 ## What I'd do next
 - **Defence in depth with Postgres RLS:** the schema enables RLS but defines no policies. I'd add `tenant_id = current_setting('app.tenant_id')` policies and set the tenant per transaction, so a missed `WHERE tenant_id` can't leak data.
