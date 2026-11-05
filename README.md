@@ -41,7 +41,11 @@ Logins: `sunset@propertyflow.com` / `client_a_2024`, `ocean@propertyflow.com` / 
 1. Logged in as each client and called `GET /api/v1/dashboard/summary` directly with each token.
    - Ocean's `prop-001` returned `1000.0` with 3 bookings, even with an empty cache.
    - Ocean could also read Sunset's `prop-002` (`4975.5`).
-2. Backend logs showed `Database pool initialization failed: 'Settings' object has no attribute 'supabase_db_user'` on **every** request. Every number on the dashboard was mock data.
+2. The backend logs showed these two lines on **every** request. Every number on the dashboard was mock data:
+   ```text
+   ERROR:app.core.database_pool:❌ Database pool initialization failed: 'Settings' object has no attribute 'supabase_db_user'
+   Database error for prop-001 (tenant: tenant-b): Database pool not available      ← falls into the mock fallback
+   ```
 3. Redis contained `revenue:prop-001` and `revenue:prop-002`, with no tenant in the key.
 4. I compared the dashboard with the source of truth in Postgres: SUM per property, with March computed both in UTC and in the property's local time. Beach House Alpha is **1000.000 in UTC-March but 2250.000 in Paris-March**.
 
@@ -170,6 +174,12 @@ curl -X POST localhost:8000/api/v1/auth/login -d '{"email":"candidate@propertyfl
 - Sub-cent storage (`NUMERIC(10,3)`) was kept. It's intentional ("sub-cent precision tracking"), so I round only at the reporting edge.
 - Half-up rounding for reporting. Banker's rounding is a one-line change if finance prefers it.
 - The schema and seed data are unchanged. This was a debugging exercise, not a rebuild.
+
+## Known issue (pre-existing, out of scope)
+- **Refreshing the page can sign the user out.** The backend sees only successful requests (no 401s), so the cause is in the original frontend session layer, which I haven't changed.
+  - The recovery fallback in `frontend/src/utils/sessionRecovery.ts:113-114` calls `import.meta.env.VITE_SUPABASE_URL.split(...)`. That variable is undefined in this setup, so it throws `TypeError`.
+  - The fallback also looks under the Supabase storage key, while `localAuthClient.ts` stores the session as `base360-auth-token`, so it could never restore the session.
+  - Fix next: read the session from `localAuthClient`'s key, and stop treating a transient empty session as a logout.
 
 ## What I'd do next
 - **Defence in depth with Postgres RLS:** the schema enables RLS but defines no policies. I'd add `tenant_id = current_setting('app.tenant_id')` policies and set the tenant per transaction, so a missed `WHERE tenant_id` can't leak data.
