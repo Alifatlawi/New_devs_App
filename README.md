@@ -1,6 +1,6 @@
 # Property Revenue Dashboard: Bug Investigation & Fixes
 
-**Loom walkthrough:** _LOOM_LINK_
+**Loom walkthrough:** https://www.loom.com/share/41829571069a4ac48cd188ba8a385f28
 
 Three reported issues (two from clients, Sunset Properties and Ocean Rentals, and one from our finance team), one root-cause chain. The dashboard never read the database. It served hard-coded mock numbers keyed only by property ID, behind a Redis cache keyed only by property ID. Property IDs are only unique **per tenant** (`prop-001` exists for both clients). Month boundaries were naive UTC, and money went through `float`.
 
