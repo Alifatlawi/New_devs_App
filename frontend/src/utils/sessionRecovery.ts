@@ -7,7 +7,15 @@
 import { supabase } from '../lib/supabase';
 import { Session } from '@supabase/supabase-js';
 
-export class SessionRecovery {
+export // Supabase stores the session under sb-<project>-auth-token; without a Supabase URL (local auth)
+// the session lives under 'base360-auth-token'. Calling .split on an undefined URL threw a TypeError.
+const getAuthStorageKey = (): string => {
+  const supabaseUrl: string | undefined = import.meta.env.VITE_SUPABASE_URL;
+  const project = supabaseUrl?.split('//')[1]?.split('.')[0];
+  return project ? `sb-${project}-auth-token` : 'base360-auth-token';
+};
+
+class SessionRecovery {
   private static instance: SessionRecovery;
   private recoveryPromise: Promise<Session | null> | null = null;
   private recoveryStartTime: number | null = null;
@@ -110,8 +118,7 @@ export class SessionRecovery {
       // If no session found, check localStorage directly as a fallback
       console.log('[SessionRecovery] No session from getSession, checking localStorage directly...');
       
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const storageKey = `sb-${supabaseUrl.split('//')[1].split('.')[0]}-auth-token`;
+      const storageKey = getAuthStorageKey();
       const storedData = localStorage.getItem(storageKey);
       
       if (storedData) {
@@ -170,8 +177,7 @@ export class SessionRecovery {
    */
   clearStoredSession(): void {
     try {
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const storageKey = `sb-${supabaseUrl.split('//')[1].split('.')[0]}-auth-token`;
+      const storageKey = getAuthStorageKey();
       localStorage.removeItem(storageKey);
       console.log('[SessionRecovery] Stored session cleared');
     } catch (error) {
