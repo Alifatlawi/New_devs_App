@@ -10,6 +10,8 @@ Three client reports, one root-cause chain. The dashboard never read the databas
 | 2 | **Sunset's March totals don't match** | Mock/UTC numbers: the DB was never queried, and month boundaries ignored the property's time zone. `res-tz-1` checks in at `2024-02-29 23:30Z`, which is **1 March 00:30 in Paris**. | Working DB pool, real queries. Month boundaries computed in the property's IANA time zone and converted to UTC. |
 | 3 | **Totals off by a few cents** | Amounts stored at 3 decimals (`NUMERIC(10,3)`), converted to `float` in the API, and rounded again with `Math.round(x*100)/100` in the UI (e.g. `1.005 → 1.00`). | Exact `NUMERIC` sum in Postgres, rounded **once**, half-up, to cents with `Decimal`. Sent as a decimal string (`"2250.00"`). No float maths in the UI. |
 
+| + | **Found while investigating: revenue readable without credentials** | Auth fallback accepted the literal `mock-token-123` and **unsigned** JWTs. Login issued tokens for mock emails **with any password**. | No unverified fallback, 401 for unverified logins, regression tests. |
+
 Correct figures (all bookings in the seed are March 2024, local time):
 
 | Client | Property | Before (UI) | After | Bookings |
@@ -99,21 +101,40 @@ after   GET /dashboard/summary?property_id=prop-001  →  {"total_revenue": "0.0
 after   GET /dashboard/summary?property_id=prop-001&year=2024&month=3  →  {"total_revenue": "2250.00", "reservations_count": 4, ...}  (Sunset)
 ```
 
-### 5. Smaller fixes found on the way
+### 5. Authentication bypasses (found while investigating the privacy report)
+An unauthenticated caller could read Sunset's revenue in three ways. Each one returned `2250.00` before the fix:
+
+```bash
+curl -H 'Authorization: Bearer mock-token-123' 'localhost:8000/api/v1/dashboard/summary?property_id=prop-001'
+curl -H "Authorization: Bearer <JWT with any payload and a fake signature>" ...
+curl -X POST localhost:8000/api/v1/auth/login -d '{"email":"candidate@propertyflow.com","password":"anything"}' ...
+```
+
+- **Root cause:** without Supabase configured, `authenticate_request` fell back to a mock client whose `get_user` accepted a hard-coded token. It also decoded JWTs with `verify_signature=False`. `/auth/login` looked up any non-demo email in a mock user list and issued a token **without checking the password**. All of these mapped to tenant-a.
+- **Fix:**
+  - The Supabase fallback only runs when Supabase is really configured.
+  - Logins that aren't verified credentials get a **401**.
+  - `test_auth_bypass.py` covers each case.
+
+### 6. Smaller fixes found on the way
 - **Stale response race in `RevenueSummary.tsx`:** a slow response for a previously selected property could overwrite the current one. Responses for an outdated selection are now ignored.
 - **Error never cleared:** after one failed request, the error stayed on screen even after switching property. It's now cleared on each new request.
 - **Fake trend badge removed:** the UI showed a hard-coded "↑ 12%" badge (the code comment said "Fake trend indicator for premium feel"). Fabricated numbers don't belong on a financial dashboard.
-- **Redis outage:** the cache now degrades to an uncached DB read instead of failing the request.
+- **Redis outage or corrupt cache entry:** the cache now degrades to an uncached DB read instead of failing the request.
+- **Edge cases:**
+  - A NULL `currency` counts as the default currency, so it no longer triggers a false "mixed currency" 409.
+  - An invalid stored time zone returns a clear error instead of an unhandled 500.
+- **Year picker:** it defaults to the most recent year with bookings, so picking "March" doesn't land on an empty year.
 - Added loading, empty ("No reservations in this period") and error states, and a layout that works on narrow screens.
 
 ## API (changed endpoints)
 
 | Endpoint | Response | Errors |
 |---|---|---|
-| `GET /api/v1/dashboard/properties` | `[{ "id", "name", "timezone" }]` for the caller's tenant | 401, 403 no tenant, 503 |
+| `GET /api/v1/dashboard/properties` | `[{ "id", "name", "timezone", "latest_booking_year" }]` for the caller's tenant | 401, 403 no tenant, 503 |
 | `GET /api/v1/dashboard/summary?property_id=&year=&month=` | `{ "property_id", "total_revenue": "2250.00", "currency", "reservations_count", "year", "month" }` | 401, 403, 404 not yours, 409 mixed currency, 422 bad period, 503 DB down |
 
-## Tests (`backend/tests`, 20 tests, `make test`)
+## Tests (`backend/tests`, 24 tests, `make test`)
 - `test_reservations.py`:
   - Paris and New York month bounds across DST
   - December roll-over
@@ -131,7 +152,17 @@ after   GET /dashboard/summary?property_id=prop-001&year=2024&month=3  →  {"to
   - 403 without tenant
   - 422 for invalid periods
   - 503 when the DB is down (no mock numbers)
-- `test_revenue_db_integration.py`: runs against the seeded Postgres and asserts the real March/February totals and tenant isolation. It's skipped when no DB is reachable.
+- `test_auth_bypass.py`:
+  - mock token rejected
+  - forged unsigned JWT rejected
+  - wrong password rejected
+  - valid login gets its own tenant
+- `test_revenue_db_integration.py`: runs against the seeded Postgres and asserts:
+  - the real March/February totals
+  - tenant isolation
+  - tenant-scoped property lists
+
+  It's skipped only when no DB is reachable; SQL errors fail it.
 
 ## Assumptions
 - **Revenue is attributed to the check-in month** in the property's local time. This matches the existing query in the original code. Splitting a stay across months by night is a product decision; see below.
@@ -148,3 +179,4 @@ after   GET /dashboard/summary?property_id=prop-001&year=2024&month=3  →  {"to
 - **Multi-currency reporting:** per-currency totals or FX conversion with a dated rate, instead of a 409.
 - Frontend tests (React Testing Library) for the dashboard states, and CI running pytest. Today CI only runs pre-commit.
 - Resolve the tenant from a verified JWT claim (or a `user_tenants` table) instead of the email mapping in `TenantResolver`.
+- Real authentication for non-demo accounts: Supabase `sign_in_with_password`, token expiry honoured by the auth cache, and revocation on logout.
