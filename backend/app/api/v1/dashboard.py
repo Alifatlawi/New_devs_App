@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -15,6 +15,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 DATA_UNAVAILABLE = "Revenue data is temporarily unavailable"
+
+
+class RevenueSummaryResponse(BaseModel):
+    property_id: str
+    # Decimal string rounded to cents (e.g. "2250.00"); never a float, so no binary rounding error.
+    total_revenue: str
+    currency: str
+    reservations_count: int
+    year: Optional[int] = None
+    month: Optional[int] = None
 
 
 class PropertyResponse(BaseModel):
@@ -39,13 +49,18 @@ async def get_dashboard_properties(tenant_id: str = Depends(require_tenant)) -> 
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=DATA_UNAVAILABLE)
 
 
-@router.get("/dashboard/summary")
+@router.get("/dashboard/summary", response_model=RevenueSummaryResponse)
 async def get_dashboard_summary(
     property_id: str = Query(..., min_length=1, max_length=64),
+    year: Optional[int] = Query(None, ge=2000, le=2100),
+    month: Optional[int] = Query(None, ge=1, le=12, description="Calendar month in the property's local time zone"),
     tenant_id: str = Depends(require_tenant),
-) -> Dict[str, Any]:
+) -> RevenueSummaryResponse:
+    if (year is None) != (month is None):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Provide both year and month, or neither")
+
     try:
-        revenue_data = await get_revenue_summary(property_id, tenant_id)
+        revenue_data = await get_revenue_summary(property_id, tenant_id, year, month)
     except PropertyNotFoundError:
         # Same 404 whether the property doesn't exist or belongs to another tenant (no enumeration).
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Property not found")
@@ -58,11 +73,11 @@ async def get_dashboard_summary(
         logger.exception("Revenue query failed for tenant %s property %s", tenant_id, property_id)
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=DATA_UNAVAILABLE)
 
-    total_revenue_float = float(revenue_data['total'])
-
-    return {
-        "property_id": revenue_data['property_id'],
-        "total_revenue": total_revenue_float,
-        "currency": revenue_data['currency'],
-        "reservations_count": revenue_data['count']
-    }
+    return RevenueSummaryResponse(
+        property_id=revenue_data["property_id"],
+        total_revenue=revenue_data["total"],
+        currency=revenue_data["currency"],
+        reservations_count=revenue_data["count"],
+        year=year,
+        month=month,
+    )
