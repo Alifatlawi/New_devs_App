@@ -127,7 +127,11 @@ async def authenticate_request(
                 user = MockUser(payload)
                 
             except JWTError:
-                # If custom JWT fails, try Supabase auth
+                # Only fall back to Supabase when it is actually configured. Without it, the
+                # fallback is a mock client that accepted the literal "mock-token-123" and
+                # unsigned JWTs (signature never verified), i.e. anyone could read tenant data.
+                if not (settings.supabase_url and settings.supabase_service_role_key):
+                    raise
                 response = supabase.auth.get_user(token)
                 user = response.user
                 

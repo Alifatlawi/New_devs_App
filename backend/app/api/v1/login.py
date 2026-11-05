@@ -1,11 +1,7 @@
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from typing import Optional, Dict, Any
-from ...database import supabase
-from ...core.tenant_resolver import TenantResolver
-from ...models.auth import Permission
 import logging
-import hashlib
 from datetime import datetime, timedelta
 import jwt
 from ...config import settings
@@ -23,12 +19,6 @@ class LoginResponse(BaseModel):
     user: Dict[str, Any]
     error: Optional[str] = None
 
-ADMIN_EMAILS = [
-    "sid@theflexliving.com",
-    "raouf@theflexliving.com", 
-    "michael@theflexliving.com",
-    "candidate@propertyflow.com"
-]
 
 @router.post("/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
@@ -99,89 +89,14 @@ async def login(request: LoginRequest):
                 }
             )
         
-        # For other users, check if they exist in the database
-        # This is a simplified auth - in production you'd check password hashes
-        try:
-            # Check if user exists in Supabase auth
-            user_result = supabase.auth.admin.list_users()
-            users = user_result if hasattr(user_result, '__iter__') else []
-            
-            user = None
-            for u in users:
-                if u.email and u.email.lower() == email:
-                    user = u
-                    break
-                    
-            if not user:
-                logger.warning(f"[LOGIN] User not found: {email}")
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid credentials"
-                )
-            
-            # Get user permissions
-            permissions_response = (
-                supabase.service.table("user_permissions")
-                .select("section, action")
-                .eq("user_id", user.id)
-                .execute()
-            )
-            permissions = [Permission(**perm) for perm in permissions_response.data]
-            
-            # Get user cities  
-            cities_response = (
-                supabase.service.table("users_city")
-                .select("city_name")
-                .eq("user_id", user.id)
-                .execute()
-            )
-            user_cities = [city["city_name"].lower() for city in cities_response.data if city.get("city_name")]
-            
-            # Check admin status
-            is_admin = (
-                user.email in ADMIN_EMAILS or 
-                (user.app_metadata and user.app_metadata.get("role") == "admin")
-            )
-            
-            # Resolve tenant ID
-            tenant_id = await TenantResolver.resolve_tenant_id(user_id=user.id, user_email=user.email)
-            
-            # Create JWT token
-            user_data = {
-                "id": user.id,
-                "email": user.email,
-                "is_admin": is_admin,
-                "tenant_id": tenant_id,
-                "exp": datetime.utcnow() + timedelta(hours=24),
-                "aud": "authenticated"
-            }
-            
-            token = jwt.encode(user_data, settings.secret_key, algorithm="HS256")
-            
-            logger.info(f"[LOGIN] Success for {email}")
-            
-            return LoginResponse(
-                access_token=token,
-                user={
-                    "id": user.id,
-                    "email": user.email,
-                    "name": user.user_metadata.get("name", email.split("@")[0]) if user.user_metadata else email.split("@")[0],
-                    "is_admin": is_admin,
-                    "tenant_id": tenant_id,
-                    "permissions": [{"section": p.section, "action": p.action} for p in permissions],
-                    "cities": user_cities
-                }
-            )
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"[LOGIN] Database error for {email}: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Login failed"
-            )
-            
+        # Any other account is rejected. The previous fallback looked the email up in the
+        # (mock) user list and issued a token without ever checking the password.
+        logger.warning(f"[LOGIN] Invalid credentials for: {email}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid credentials"
+        )
+
     except HTTPException:
         raise
     except Exception as e:
